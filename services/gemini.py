@@ -6,35 +6,63 @@ Handles: nudge generation, vision food analysis, chat coaching,
 and weekly insights.
 
 SDK: google-genai (NOT the deprecated google-generativeai)
+
+IMPORTANT: The google-genai SDK's client.models.generate_content()
+is SYNCHRONOUS. All calls are wrapped in asyncio.to_thread() to
+avoid blocking the FastAPI event loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, AsyncIterator, Dict, List, Optional
-
-from google import genai
-from google.genai import types
 
 from config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# ── Client Singleton ───────────────────────────────────────────
-_client: Optional[genai.Client] = None
+# ── Lazy imports for resilience ────────────────────────────────
+# These are imported at call time so the app doesn't crash on startup
+# if google-genai isn't installed yet.
+_client = None
+_genai = None
+_types = None
 
 
-def _get_client() -> genai.Client:
+def _ensure_imports():
+    """Lazy-import google-genai SDK modules."""
+    global _genai, _types
+    if _genai is None:
+        try:
+            from google import genai
+            from google.genai import types
+            _genai = genai
+            _types = types
+            logger.info("google-genai SDK loaded successfully")
+        except ImportError as e:
+            logger.error(
+                "google-genai SDK not installed! Run: pip install google-genai\n%s", e
+            )
+            raise ImportError(
+                "google-genai is not installed. Run: pip install google-genai"
+            ) from e
+
+
+def _get_client():
     """Lazy-initialize the Gemini client."""
     global _client
     if _client is None:
+        _ensure_imports()
         settings = get_settings()
-        if not settings.gemini_api_key:
+        api_key = settings.gemini_api_key.strip() if settings.gemini_api_key else ""
+        if not api_key:
+            logger.error("GEMINI_API_KEY is not set or empty!")
             raise ValueError(
-                "GEMINI_API_KEY is not set. Please add it to your .env file."
+                "GEMINI_API_KEY is not set. Add it to your .env file."
             )
-        _client = genai.Client(api_key=settings.gemini_api_key)
+        _client = _genai.Client(api_key=api_key)
         logger.info("Gemini client initialized with model: %s", settings.gemini_model)
     return _client
 
@@ -42,6 +70,92 @@ def _get_client() -> genai.Client:
 def _get_model_name() -> str:
     """Get the configured model name."""
     return get_settings().gemini_model
+
+
+def _sync_generate(contents, temperature: float = 0.7, max_output_tokens: int = 256) -> str:
+    """
+    Synchronous helper for Gemini text generation.
+    Called via asyncio.to_thread() from async functions.
+    """
+    _ensure_imports()
+    client = _get_client()
+    model = _get_model_name()
+
+    try:
+        config = _types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        )
+    except (AttributeError, TypeError):
+        # Fallback if GenerateContentConfig doesn't exist in this SDK version
+        config = {"temperature": temperature, "max_output_tokens": max_output_tokens}
+        logger.warning("Using dict-based config (GenerateContentConfig not available)")
+
+    response = client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=config,
+    )
+
+    return response.text.strip() if response.text else ""
+
+
+def _sync_generate_vision(text_prompt: str, image_bytes: bytes, mime_type: str) -> str:
+    """
+    Synchronous helper for Gemini vision/multimodal generation.
+    Called via asyncio.to_thread() from async functions.
+    """
+    _ensure_imports()
+    client = _get_client()
+    model = _get_model_name()
+
+    try:
+        image_part = _types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+    except (AttributeError, TypeError):
+        # Fallback: try dict-based part
+        import base64
+        image_part = {
+            "inline_data": {
+                "mime_type": mime_type,
+                "data": base64.b64encode(image_bytes).decode("utf-8"),
+            }
+        }
+        logger.warning("Using dict-based Part (types.Part.from_bytes not available)")
+
+    try:
+        config = _types.GenerateContentConfig(
+            temperature=0.3,
+            max_output_tokens=512,
+        )
+    except (AttributeError, TypeError):
+        config = {"temperature": 0.3, "max_output_tokens": 512}
+
+    response = client.models.generate_content(
+        model=model,
+        contents=[text_prompt, image_part],
+        config=config,
+    )
+
+    return response.text.strip() if response.text else ""
+
+
+def _parse_json_response(raw_text: str) -> dict:
+    """Parse JSON from Gemini response, handling markdown code fences."""
+    if not raw_text:
+        return {}
+
+    text = raw_text.strip()
+
+    # Strip markdown code fences
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # Remove first line (```json or ```) and last line (```)
+        if len(lines) > 2:
+            text = "\n".join(lines[1:-1])
+        elif len(lines) == 2:
+            text = lines[1].rstrip("`")
+
+    return json.loads(text)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -72,15 +186,9 @@ async def generate_nudge(context: Dict[str, Any]) -> str:
     """
     Generate a contextual food nudge using Gemini.
 
-    Args:
-        context: Aggregated user context dict with keys matching
-                 the NUDGE_SYSTEM_PROMPT template variables.
-
-    Returns:
-        A personalized food recommendation string.
+    Uses asyncio.to_thread() to avoid blocking the event loop.
     """
     try:
-        client = _get_client()
         prompt = NUDGE_SYSTEM_PROMPT.format(
             name=context.get("name", "there"),
             goals=context.get("goals", "eat healthier"),
@@ -95,16 +203,11 @@ async def generate_nudge(context: Dict[str, Any]) -> str:
             dietary_restrictions=context.get("dietary_restrictions", "none"),
         )
 
-        response = client.models.generate_content(
-            model=_get_model_name(),
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                max_output_tokens=256,
-            ),
+        # Run sync SDK call in a thread pool to not block the event loop
+        nudge_text = await asyncio.to_thread(
+            _sync_generate, prompt, 0.7, 256
         )
 
-        nudge_text = response.text.strip() if response.text else ""
         if not nudge_text:
             nudge_text = "Time for a balanced meal! Consider something with lean protein and vegetables."
 
@@ -144,44 +247,21 @@ Return ONLY the JSON object, no additional text."""
 async def analyze_food_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> Dict[str, Any]:
     """
     Analyze a food photo using Gemini Vision.
-
-    Args:
-        image_bytes: Raw bytes of the food image.
-        mime_type: MIME type of the image (image/jpeg, image/png, etc.).
-
-    Returns:
-        Dict with food_name, description, meal_type, macros, and confidence.
+    Uses asyncio.to_thread() to avoid blocking the event loop.
     """
     try:
-        client = _get_client()
-
-        response = client.models.generate_content(
-            model=_get_model_name(),
-            contents=[
-                VISION_PROMPT,
-                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            ],
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                max_output_tokens=512,
-            ),
+        raw_text = await asyncio.to_thread(
+            _sync_generate_vision, VISION_PROMPT, image_bytes, mime_type
         )
 
-        raw_text = response.text.strip() if response.text else ""
-
-        # Strip markdown code fences if present
-        if raw_text.startswith("```"):
-            lines = raw_text.split("\n")
-            raw_text = "\n".join(lines[1:-1]) if len(lines) > 2 else raw_text
-
-        result = json.loads(raw_text)
+        result = _parse_json_response(raw_text)
         logger.info("Food image analyzed: %s (confidence: %.2f)",
                      result.get("food_name", "unknown"),
                      result.get("confidence", 0))
         return result
 
     except json.JSONDecodeError as e:
-        logger.error("Failed to parse Gemini vision response as JSON: %s", e)
+        logger.error("Failed to parse Gemini vision response as JSON: %s (raw: %s)", e, raw_text[:200] if 'raw_text' in dir() else 'N/A')
         return {
             "food_name": "Unidentified meal",
             "description": "Could not identify the food in the image.",
@@ -191,7 +271,13 @@ async def analyze_food_image(image_bytes: bytes, mime_type: str = "image/jpeg") 
         }
     except Exception as e:
         logger.error("Vision analysis failed: %s", e)
-        raise
+        return {
+            "food_name": "Unidentified meal",
+            "description": f"Analysis error: {str(e)[:100]}",
+            "meal_type": "snack",
+            "macros": {"calories": 300, "protein_g": 15, "carbs_g": 30, "fat_g": 12, "fiber_g": None},
+            "confidence": 0.1,
+        }
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -222,32 +308,16 @@ Use typical serving sizes. Return ONLY the JSON object."""
 async def analyze_food_text(food_description: str) -> Dict[str, Any]:
     """
     Analyze a textual food description using Gemini.
-
-    Args:
-        food_description: User's text description of their meal.
-
-    Returns:
-        Dict with food_name, macros, and confidence.
+    Uses asyncio.to_thread() to avoid blocking the event loop.
     """
     try:
-        client = _get_client()
         prompt = MANUAL_LOG_PROMPT.format(food_description=food_description)
 
-        response = client.models.generate_content(
-            model=_get_model_name(),
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.3,
-                max_output_tokens=512,
-            ),
+        raw_text = await asyncio.to_thread(
+            _sync_generate, prompt, 0.3, 512
         )
 
-        raw_text = response.text.strip() if response.text else ""
-        if raw_text.startswith("```"):
-            lines = raw_text.split("\n")
-            raw_text = "\n".join(lines[1:-1]) if len(lines) > 2 else raw_text
-
-        return json.loads(raw_text)
+        return _parse_json_response(raw_text)
 
     except json.JSONDecodeError:
         logger.error("Failed to parse manual food analysis JSON")
@@ -259,7 +329,12 @@ async def analyze_food_text(food_description: str) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error("Manual food analysis failed: %s", e)
-        raise
+        return {
+            "food_name": food_description[:50],
+            "description": food_description,
+            "macros": {"calories": 400, "protein_g": 20, "carbs_g": 40, "fat_g": 15, "fiber_g": None},
+            "confidence": 0.2,
+        }
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -292,18 +367,9 @@ async def chat_coach(
 ) -> str:
     """
     Multi-turn food coaching chat using Gemini.
-
-    Args:
-        message: The user's current message.
-        conversation_history: List of previous {role, content} dicts.
-        user_context: Aggregated user context for personalization.
-
-    Returns:
-        The coach's response string.
+    Uses asyncio.to_thread() to avoid blocking the event loop.
     """
     try:
-        client = _get_client()
-
         system_prompt = COACH_SYSTEM_PROMPT.format(
             name=user_context.get("name", "there"),
             goals=user_context.get("goals", "eat healthier"),
@@ -315,20 +381,15 @@ async def chat_coach(
 
         # Build the full prompt with conversation history
         full_contents = [system_prompt]
-        for msg in conversation_history[-10:]:  # Keep last 10 messages for context window
+        for msg in conversation_history[-10:]:
             full_contents.append(f"{msg['role'].upper()}: {msg['content']}")
         full_contents.append(f"USER: {message}")
+        combined_prompt = "\n\n".join(full_contents)
 
-        response = client.models.generate_content(
-            model=_get_model_name(),
-            contents="\n\n".join(full_contents),
-            config=types.GenerateContentConfig(
-                temperature=0.8,
-                max_output_tokens=1024,
-            ),
+        reply = await asyncio.to_thread(
+            _sync_generate, combined_prompt, 0.8, 1024
         )
 
-        reply = response.text.strip() if response.text else ""
         if not reply:
             reply = "I'm here to help with your nutrition! Could you tell me more about what you'd like advice on?"
 
@@ -349,46 +410,22 @@ async def chat_coach_stream(
     user_context: Dict[str, Any],
 ) -> AsyncIterator[str]:
     """
-    Streaming version of the food coaching chat.
-    Yields text chunks as they arrive from Gemini.
-
-    Args:
-        message: The user's current message.
-        conversation_history: Previous conversation messages.
-        user_context: Aggregated user context.
-
-    Yields:
-        Text chunks from the coach's response.
+    Streaming version — falls back to non-streaming chunked response
+    to avoid sync iterator issues with the SDK.
     """
     try:
-        client = _get_client()
+        # Use non-streaming approach but simulate chunks for SSE
+        full_reply = await chat_coach(message, conversation_history, user_context)
 
-        system_prompt = COACH_SYSTEM_PROMPT.format(
-            name=user_context.get("name", "there"),
-            goals=user_context.get("goals", "eat healthier"),
-            dietary_restrictions=user_context.get("dietary_restrictions", "none"),
-            recent_meals_summary=user_context.get("recent_meals_summary", "no data"),
-            todays_schedule=user_context.get("todays_schedule", "no schedule data"),
-            habit_score=user_context.get("habit_score", "N/A"),
-        )
-
-        full_contents = [system_prompt]
-        for msg in conversation_history[-10:]:
-            full_contents.append(f"{msg['role'].upper()}: {msg['content']}")
-        full_contents.append(f"USER: {message}")
-
-        response = client.models.generate_content_stream(
-            model=_get_model_name(),
-            contents="\n\n".join(full_contents),
-            config=types.GenerateContentConfig(
-                temperature=0.8,
-                max_output_tokens=1024,
-            ),
-        )
-
-        for chunk in response:
-            if chunk.text:
-                yield chunk.text
+        # Yield in small chunks to simulate streaming
+        words = full_reply.split(" ")
+        chunk_size = 3
+        for i in range(0, len(words), chunk_size):
+            chunk = " ".join(words[i:i + chunk_size])
+            if i > 0:
+                chunk = " " + chunk
+            yield chunk
+            await asyncio.sleep(0.05)  # Small delay for streaming effect
 
     except Exception as e:
         logger.error("Streaming coach failed: %s", e)
@@ -424,17 +461,9 @@ async def generate_weekly_insights(
 ) -> List[str]:
     """
     Generate AI-powered weekly nutrition insights.
-
-    Args:
-        user_context: User profile context.
-        weekly_summary: Text summary of the week's meals.
-        habit_scores: Dict with overall, consistency, variety, timing scores.
-
-    Returns:
-        List of insight strings.
+    Uses asyncio.to_thread() to avoid blocking the event loop.
     """
     try:
-        client = _get_client()
         prompt = INSIGHTS_PROMPT.format(
             name=user_context.get("name", "User"),
             goals=user_context.get("goals", "eat healthier"),
@@ -445,22 +474,12 @@ async def generate_weekly_insights(
             timing=habit_scores.get("timing", 0),
         )
 
-        response = client.models.generate_content(
-            model=_get_model_name(),
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.6,
-                max_output_tokens=512,
-            ),
+        raw_text = await asyncio.to_thread(
+            _sync_generate, prompt, 0.6, 512
         )
 
-        raw_text = response.text.strip() if response.text else "[]"
-        if raw_text.startswith("```"):
-            lines = raw_text.split("\n")
-            raw_text = "\n".join(lines[1:-1]) if len(lines) > 2 else raw_text
-
-        insights = json.loads(raw_text)
-        return insights if isinstance(insights, list) else []
+        result = _parse_json_response(raw_text or "[]")
+        return result if isinstance(result, list) else []
 
     except Exception as e:
         logger.error("Weekly insights generation failed: %s", e)

@@ -12,10 +12,12 @@ Stack: FastAPI · Gemini AI · Google Maps · Google Calendar · Firestore
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from config import get_settings
 from middleware.auth import create_access_token, get_current_user_id
@@ -53,9 +55,10 @@ app = FastAPI(
 )
 
 # ── CORS Middleware ────────────────────────────────────────────
+# Allow all origins for Codespace/demo. Restrict in production.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origin_list,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,20 +70,23 @@ app.include_router(log.router)
 app.include_router(coach.router)
 app.include_router(report.router)
 
+# ── Serve Static Files (Frontend UI) ─────────────────────────
+STATIC_DIR = Path(__file__).parent / "static"
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
 
 # ═══════════════════════════════════════════════════════════════
 # ROOT + HEALTH ENDPOINTS (no auth required)
 # ═══════════════════════════════════════════════════════════════
 
 
-@app.get(
-    "/",
-    response_model=HealthResponse,
-    tags=["System"],
-    summary="Root endpoint",
-)
-async def root() -> HealthResponse:
-    """Root endpoint — returns service info."""
+@app.get("/", tags=["System"], summary="NutriOS Web UI", include_in_schema=False)
+async def root():
+    """Serve the NutriOS frontend UI."""
+    index_path = STATIC_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(str(index_path), media_type="text/html")
     return HealthResponse(
         status="healthy",
         service="nutrios",

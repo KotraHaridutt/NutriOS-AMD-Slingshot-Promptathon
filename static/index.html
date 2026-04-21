@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NutriOS — Context-Aware Food Intelligence</title>
+    <meta name="description" content="NutriOS helps you decide what to eat based on your schedule, location, activity, and past patterns. Powered by Gemini AI.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍎</text></svg>">
+</head>
+<body>
+    <!-- ══════════════ AUTH SCREEN ══════════════ -->
+    <div id="auth-screen" class="screen active">
+        <div class="auth-container">
+            <div class="auth-glow"></div>
+            <div class="auth-card">
+                <div class="auth-logo">🍎</div>
+                <h1 class="auth-title">NutriOS</h1>
+                <p class="auth-subtitle">Context-Aware Food Intelligence</p>
+                <p class="auth-description">
+                    Know what to eat <strong>right now</strong> — based on your schedule, 
+                    location, activity, and past patterns.
+                </p>
+                <div class="auth-form">
+                    <div class="input-group">
+                        <label for="auth-name">Your Name</label>
+                        <input type="text" id="auth-name" placeholder="e.g., Alex" value="Demo User" autocomplete="name">
+                    </div>
+                    <div class="input-group">
+                        <label for="auth-userid">User ID</label>
+                        <input type="text" id="auth-userid" placeholder="e.g., alex_01" value="demo_user_001">
+                    </div>
+                    <button id="auth-btn" class="btn-primary btn-large" onclick="handleLogin()">
+                        <span class="btn-text">Get Started</span>
+                        <span class="btn-loader" hidden></span>
+                    </button>
+                </div>
+                <p class="auth-note">Powered by Google Gemini AI</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══════════════ MAIN APP ══════════════ -->
+    <div id="app-screen" class="screen">
+        <!-- NAV BAR -->
+        <nav class="navbar">
+            <div class="nav-brand">
+                <span class="nav-logo">🍎</span>
+                <span class="nav-title">NutriOS</span>
+            </div>
+            <div class="nav-tabs">
+                <button class="nav-tab active" data-tab="dashboard" onclick="switchTab('dashboard')">
+                    <span class="tab-icon">📊</span>
+                    <span class="tab-label">Dashboard</span>
+                </button>
+                <button class="nav-tab" data-tab="log" onclick="switchTab('log')">
+                    <span class="tab-icon">📸</span>
+                    <span class="tab-label">Log Meal</span>
+                </button>
+                <button class="nav-tab" data-tab="coach" onclick="switchTab('coach')">
+                    <span class="tab-icon">💬</span>
+                    <span class="tab-label">Coach</span>
+                </button>
+                <button class="nav-tab" data-tab="report" onclick="switchTab('report')">
+                    <span class="tab-icon">📈</span>
+                    <span class="tab-label">Report</span>
+                </button>
+            </div>
+            <div class="nav-actions">
+                <button class="nav-user" id="nav-user-btn" onclick="switchTab('profile')">
+                    <span class="user-avatar" id="user-avatar">D</span>
+                    <span class="user-name" id="user-name-display">Demo</span>
+                </button>
+                <button class="btn-icon" onclick="handleLogout()" title="Logout">⏻</button>
+            </div>
+        </nav>
+
+        <!-- MAIN CONTENT AREA -->
+        <main class="main-content">
+
+            <!-- ──── DASHBOARD TAB ──── -->
+            <section id="tab-dashboard" class="tab-content active">
+                <div class="page-header">
+                    <h1>Good <span id="greeting-time">afternoon</span>, <span id="greeting-name">there</span>!</h1>
+                    <p class="page-subtitle">Here's your personalized food intelligence</p>
+                </div>
+
+                <!-- Nudge Card -->
+                <div class="card card-gradient nudge-card">
+                    <div class="card-header">
+                        <h2>🎯 Your Food Nudge</h2>
+                        <button class="btn-secondary btn-small" id="nudge-btn" onclick="getNudge()">
+                            Get Nudge
+                        </button>
+                    </div>
+                    <div id="nudge-content" class="nudge-content">
+                        <p class="nudge-placeholder">Click "Get Nudge" to get a personalized food recommendation based on your schedule, location, and meal history.</p>
+                    </div>
+                    <div id="nudge-places" class="nudge-places" hidden></div>
+                    <div id="nudge-event" class="nudge-event" hidden></div>
+                </div>
+
+                <!-- Location Input -->
+                <div class="card">
+                    <h3>📍 Your Location (for nearby places)</h3>
+                    <div class="location-inputs">
+                        <div class="input-group input-inline">
+                            <label for="lat-input">Latitude</label>
+                            <input type="number" id="lat-input" value="37.7749" step="0.0001" min="-90" max="90">
+                        </div>
+                        <div class="input-group input-inline">
+                            <label for="lng-input">Longitude</label>
+                            <input type="number" id="lng-input" value="-122.4194" step="0.0001" min="-180" max="180">
+                        </div>
+                        <button class="btn-secondary" onclick="getGeolocation()">📍 Use My Location</button>
+                    </div>
+                </div>
+
+                <!-- Quick Stats -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-meals">—</div>
+                        <div class="stat-label">Meals Today</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-calories">—</div>
+                        <div class="stat-label">Calories Today</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-streak">—</div>
+                        <div class="stat-label">Day Streak</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="stat-score">—</div>
+                        <div class="stat-label">Habit Score</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ──── LOG MEAL TAB ──── -->
+            <section id="tab-log" class="tab-content">
+                <div class="page-header">
+                    <h1>Log Your Meal</h1>
+                    <p class="page-subtitle">Photo or text — Gemini AI does the rest</p>
+                </div>
+
+                <!-- Sub-tabs for photo vs manual -->
+                <div class="sub-tabs">
+                    <button class="sub-tab active" onclick="switchLogMode('photo')">📸 Photo</button>
+                    <button class="sub-tab" onclick="switchLogMode('manual')">✍️ Manual</button>
+                </div>
+
+                <!-- Photo Upload -->
+                <div id="log-photo" class="log-mode active">
+                    <div class="card upload-card">
+                        <div class="upload-zone" id="upload-zone" onclick="document.getElementById('photo-input').click()">
+                            <div class="upload-icon">📷</div>
+                            <p class="upload-text">Click or drag a photo of your meal</p>
+                            <p class="upload-hint">JPEG, PNG, or WebP • Max 10MB</p>
+                            <input type="file" id="photo-input" accept="image/jpeg,image/png,image/webp" hidden onchange="handlePhotoSelect(event)">
+                        </div>
+                        <div id="photo-preview" class="photo-preview" hidden>
+                            <img id="preview-img" src="" alt="Meal preview">
+                            <button class="btn-secondary btn-small" onclick="clearPhoto()">✕ Clear</button>
+                        </div>
+                        <button class="btn-primary btn-large" id="photo-submit-btn" onclick="submitPhoto()" disabled>
+                            <span class="btn-text">🔍 Analyze with Gemini Vision</span>
+                            <span class="btn-loader" hidden></span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Manual Entry -->
+                <div id="log-manual" class="log-mode">
+                    <div class="card">
+                        <div class="input-group">
+                            <label for="food-desc">What did you eat?</label>
+                            <textarea id="food-desc" rows="3" placeholder="e.g., Grilled chicken breast with brown rice and steamed broccoli, medium portion"></textarea>
+                        </div>
+                        <div class="input-group">
+                            <label for="meal-type">Meal Type</label>
+                            <select id="meal-type">
+                                <option value="breakfast">🌅 Breakfast</option>
+                                <option value="lunch" selected>☀️ Lunch</option>
+                                <option value="dinner">🌙 Dinner</option>
+                                <option value="snack">🍪 Snack</option>
+                            </select>
+                        </div>
+                        <button class="btn-primary btn-large" id="manual-submit-btn" onclick="submitManual()">
+                            <span class="btn-text">📝 Log Meal</span>
+                            <span class="btn-loader" hidden></span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Log Result -->
+                <div id="log-result" class="card card-success" hidden>
+                    <h3>✅ Meal Logged!</h3>
+                    <div id="log-result-content"></div>
+                </div>
+            </section>
+
+            <!-- ──── COACH TAB ──── -->
+            <section id="tab-coach" class="tab-content">
+                <div class="page-header">
+                    <h1>Food Coach</h1>
+                    <p class="page-subtitle">Your personal AI nutrition coach — powered by Gemini</p>
+                </div>
+
+                <div class="chat-container">
+                    <div class="chat-messages" id="chat-messages">
+                        <div class="chat-message assistant">
+                            <div class="message-avatar">🤖</div>
+                            <div class="message-bubble">
+                                <p>Hi! I'm your NutriOS food coach. I know your meal history, goals, and today's schedule. Ask me anything about nutrition!</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="chat-input-container">
+                        <textarea id="chat-input" rows="1" placeholder="Ask your coach anything..." onkeydown="handleChatKeydown(event)"></textarea>
+                        <button class="btn-primary btn-send" id="chat-send-btn" onclick="sendChatMessage()">
+                            <span class="btn-text">→</span>
+                            <span class="btn-loader" hidden></span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ──── REPORT TAB ──── -->
+            <section id="tab-report" class="tab-content">
+                <div class="page-header">
+                    <h1>Weekly Report</h1>
+                    <p class="page-subtitle">Your behavioral habit score and nutrition trends</p>
+                </div>
+
+                <div class="report-actions">
+                    <button class="btn-primary" id="report-json-btn" onclick="getReport('json')">
+                        <span class="btn-text">📊 Load Report (JSON)</span>
+                        <span class="btn-loader" hidden></span>
+                    </button>
+                    <button class="btn-secondary" id="report-html-btn" onclick="getReport('html')">
+                        📄 View HTML Report
+                    </button>
+                </div>
+
+                <div id="report-content" class="report-content" hidden>
+                    <!-- Scores Grid -->
+                    <div class="scores-grid" id="report-scores"></div>
+                    <!-- Daily Breakdown -->
+                    <div class="card" id="report-daily"></div>
+                    <!-- Insights -->
+                    <div class="card" id="report-insights"></div>
+                </div>
+
+                <!-- HTML Report iframe -->
+                <div id="report-html-container" hidden>
+                    <iframe id="report-iframe" class="report-iframe"></iframe>
+                </div>
+            </section>
+
+            <!-- ──── PROFILE TAB ──── -->
+            <section id="tab-profile" class="tab-content">
+                <div class="page-header">
+                    <h1>Your Profile</h1>
+                    <p class="page-subtitle">Manage your goals and preferences</p>
+                </div>
+
+                <div class="card">
+                    <div class="input-group">
+                        <label for="profile-name">Name</label>
+                        <input type="text" id="profile-name" placeholder="Your name">
+                    </div>
+                    <div class="input-group">
+                        <label for="profile-goal">Goal</label>
+                        <select id="profile-goal">
+                            <option value="eat_healthier">🥗 Eat Healthier</option>
+                            <option value="lose_weight">⚖️ Lose Weight</option>
+                            <option value="gain_muscle">💪 Gain Muscle</option>
+                            <option value="maintain">✨ Maintain</option>
+                        </select>
+                    </div>
+                    <div class="input-group">
+                        <label for="profile-calories">Daily Calorie Target</label>
+                        <input type="number" id="profile-calories" min="800" max="10000" value="2000">
+                    </div>
+                    <div class="input-group">
+                        <label for="profile-restrictions">Dietary Restrictions (comma-separated)</label>
+                        <input type="text" id="profile-restrictions" placeholder="e.g., vegetarian, gluten-free">
+                    </div>
+                    <button class="btn-primary" id="profile-save-btn" onclick="saveProfile()">
+                        <span class="btn-text">💾 Save Profile</span>
+                        <span class="btn-loader" hidden></span>
+                    </button>
+                    <div id="profile-status" class="status-message" hidden></div>
+                </div>
+
+                <div class="card">
+                    <h3>🔑 API Token</h3>
+                    <p class="text-muted">Your current JWT token for API access:</p>
+                    <div class="token-display">
+                        <code id="token-display" class="token-code">—</code>
+                        <button class="btn-icon" onclick="copyToken()" title="Copy token">📋</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- TOAST NOTIFICATIONS -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
