@@ -1,0 +1,44 @@
+# ──── Python ────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# ──── Virtual Environment ────
+.venv/
+venv/
+env/
+
+# ──── Secrets (NEVER commit these) ────
+.env
+*.json
+!.devcontainer/*.json
+service-account.json
+
+# ──── IDE ────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ──── OS ────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ──── Testing ────
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ──── Docker ────
+.dockerignore
+
+# ──── Misc ────
+*.log
